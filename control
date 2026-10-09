@@ -1,0 +1,8 @@
+Package: com.deni.ffesp
+Name: FFESP
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Free Fire ESP overlay for iOS
+Maintainer: DENI
+Author: DENI
+Section: Tweaks
