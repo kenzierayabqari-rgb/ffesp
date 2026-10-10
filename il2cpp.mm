@@ -25,9 +25,13 @@ bool Il2CppInit() {
     BIND(string_new);
     BIND(string_to_utf8);
     BIND(class_get_type);
+    BIND(type_get_object);
     BIND(array_length);
     BIND(array_get);
     BIND(object_get_class);
+    BIND(class_get_name);
+    BIND(image_get_class_count);
+    BIND(image_get_class);
     #undef BIND
 
     if (!api.domain_get || !api.class_from_name) return false;
