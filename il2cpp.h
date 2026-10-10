@@ -15,11 +15,14 @@ struct Il2CppApi {
     void*  (*runtime_invoke)(void*, void*, void**, void**);
     void*  (*string_new)(const char*);
     char*  (*string_to_utf8)(void*);
-    // tambahan
     void*  (*class_get_type)(void*);
+    void*  (*type_get_object)(void*);
     int    (*array_length)(void*);
     void*  (*array_get)(void*, int);
     void*  (*object_get_class)(void*);
+    void*  (*class_get_name)(void*);
+    void*  (*image_get_class_count)(void*);
+    void*  (*image_get_class)(void*, size_t);
 };
 
 extern Il2CppApi api;
