@@ -4,7 +4,7 @@ TARGET = iphone:clang:latest:14.0
 include $(THEOS)/makefiles/common.mk
 
 LIBRARY_NAME = FFESP
-FFESP_FILES = Tweak.xm Menu.mm ESP.mm il2cpp.mm KittyMemory.cpp
+FFESP_FILES = Tweak.xm Menu.mm ESP.mm AntiBypass.mm il2cpp.mm KittyMemory.cpp
 FFESP_CFLAGS  = -fobjc-arc -I. -Wno-everything
 FFESP_CCFLAGS = -std=c++17 -I. -Wno-everything
 FFESP_FRAMEWORKS = UIKit Foundation CoreGraphics QuartzCore
