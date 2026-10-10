@@ -1,5 +1,5 @@
 #import <UIKit/UIKit.h>
-@interface FFMenu : UIWindow
+@interface FFMenu : NSObject
 + (instancetype)shared;
 - (void)show;
 - (void)hide;
