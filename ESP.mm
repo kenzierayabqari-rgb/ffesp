@@ -332,7 +332,9 @@ static void Worker() {
             ClearOverlay();
 
             UIWindow* w = gameWindow();
-            if (!w) returnounds.size.width;
+            if (!w) return;
+            CGFloat sw = w.bounds.size.width;
+            CGFloat sh = w.bounds.size.height;
             CGFloat sh = w.bounds.size.height;
 
             DrawText(CGPointMake(sw - 100, 40),
