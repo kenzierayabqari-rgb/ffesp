@@ -9,6 +9,7 @@
 #include <cmath>
 #include <vector>
 #include <cstdio>
+#include <cstring>
 
 static volatile bool g_esp   = false;
 static volatile bool g_line  = true;
@@ -49,23 +50,25 @@ static void ClearOverlay() {
     for (CALayer* l in subs) [l removeFromSuperlayer];
 }
 
-static void DrawBox(CGRect r) {
-    CAShapeLayer* l = [CAShapeLayer layer];
-    l.path = [UIBezierPath bezierPathWithRect:r].CGPath;
-    l.strokeColor = [UIColor colorWithRed:0 green:1 blue:0.53 alpha:1].CGColor;
-    l.fillColor = [UIColor clearColor].CGColor;
-    l.lineWidth = 1.5;
-    [g_overlay addSublayer:l];
-}
-
-static void DrawLine(CGPoint a, CGPoint b) {
+static void DrawLine(CGPoint a, CGPoint b, UIColor* c, CGFloat w) {
     CAShapeLayer* l = [CAShapeLayer layer];
     UIBezierPath* p = [UIBezierPath bezierPath];
     [p moveToPoint:a]; [p addLineToPoint:b];
     l.path = p.CGPath;
-    l.strokeColor = [UIColor colorWithRed:1 green:0.2 blue:0.3 alpha:1].CGColor;
+    l.strokeColor = c.CGColor;
     l.fillColor = [UIColor clearColor].CGColor;
-    l.lineWidth = 1.2;
+    l.lineWidth = w;
+    [g_overlay addSublayer:l];
+}
+
+static void DrawDot(CGPoint p, UIColor* c, CGFloat r) {
+    CAShapeLayer* l = [CAShapeLayer layer];
+    UIBezierPath* path = [UIBezierPath bezierPathWithOvalInRect:
+        CGRectMake(p.x - r, p.y - r, r*2, r*2)];
+    l.path = path.CGPath;
+    l.strokeColor = c.CGColor;
+    l.fillColor = [UIColor colorWithWhite:1 alpha:0.8].CGColor;
+    l.lineWidth = 1.5;
     [g_overlay addSublayer:l];
 }
 
@@ -77,18 +80,13 @@ static void DrawText(CGPoint pt, NSString* txt) {
     t.alignmentMode = kCAAlignmentCenter;
     t.contentsScale = [UIScreen mainScreen].scale;
     t.frame = CGRectMake(pt.x - 80, pt.y, 160, 14);
-    t.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35].CGColor;
+    t.backgroundColor = [UIColor colorWithWhite:0 alpha:0.5].CGColor;
     [g_overlay addSublayer:t];
 }
 
 // ============================================================
 // MATH
 // ============================================================
-static float dist3(const Vec3& a, const Vec3& b) {
-    float dx = a.x-b.x, dy = a.y-b.y, dz = a.z-b.z;
-    return sqrtf(dx*dx + dy*dy + dz*dz);
-}
-
 static bool WorldToScreen(const Vec3& w, const float* m, float sw, float sh, CGPoint* out) {
     float x = m[0]*w.x + m[4]*w.y + m[8]*w.z  + m[12];
     float y = m[1]*w.x + m[5]*w.y + m[9]*w.z  + m[13];
@@ -101,61 +99,130 @@ static bool WorldToScreen(const Vec3& w, const float* m, float sw, float sh, CGP
 }
 
 // ============================================================
-// DEBUG STATE
+// AUTO SCAN — ITERATE SEMUA KELAS DI ASSEMBLY-CSHARP
 // ============================================================
-static char g_debugClass[96] = "scanning...";
+static char g_debugClass[128] = "scanning...";
 static int  g_debugFound = 0;
 
 static void* g_findMethod   = nullptr;
 static void* g_playerCls    = nullptr;
 static void* g_getTransform = nullptr;
 static void* g_getPosition  = nullptr;
+static int   g_classCount   = 0;
 
-// ============================================================
-// SCAN — NAMA KELAS DARI SOURCE EKSTERNAL
-// ============================================================
+// Cek apakah kelas punya method dengan nama tertentu
+static bool classHasMethod(void* klass, const char* name) {
+    if (!klass || !api.class_get_method_from_name) return false;
+    void* m = api.class_get_method_from_name(klass, name, 0);
+    return m != nullptr;
+}
+
+// Cek apakah kelas punya field dengan nama tertentu
+static bool classHasField(void* klass, const char* name) {
+    if (!klass || !api.class_get_field_from_name) return false;
+    void* f = api.class_get_field_from_name(klass, name);
+    return f != nullptr;
+}
+
+// Cari kelas player dengan scan semua kelas di assembly
+static void* findPlayerClassByScan() {
+    void* img = Il2CppImage();
+    if (!img) {
+        os_log(OS_LOG_DEFAULT, "[FFESP] no image");
+        return nullptr;
+    }
+    if (!api.image_get_class_count || !api.image_get_class) {
+        os_log(OS_LOG_DEFAULT, "[FFESP] no class count API");
+        return nullptr;
+    }
+
+    size_t count = api.image_get_class_count ? (size_t)api.image_get_class_count(img) : 0;
+    g_classCount = (int)count;
+    os_log(OS_LOG_DEFAULT, "[FFESP] total classes: %zu", count);
+
+    void* bestMatch = nullptr;
+    int bestScore = 0;
+
+    for (size_t i = 0; i < count; i++) {
+        void* klass = api.image_get_class ? api.image_get_class(img, i) : nullptr;
+        if (!klass) continue;
+
+        int score = 0;
+
+        // Cek method get_transform (wajib ada di MonoBehaviour)
+        if (classHasMethod(klass, "get_transform")) score += 3;
+
+        // Cek method get_position (kadang ada di player)
+        if (classHasMethod(klass, "get_position")) score += 2;
+
+        // Cek field yang khas player
+        if (classHasField(klass, "m_Position")) score += 2;
+        if (classHasField(klass, "m_Team")) score += 2;
+        if (classHasField(klass, "m_IsDead")) score += 2;
+        if (classHasField(klass, "m_Health")) score += 2;
+        if (classHasField(klass, "m_HP")) score += 1;
+        if (classHasField(klass, "m_Name")) score += 1;
+        if (classHasField(klass, "m_PlayerID")) score += 1;
+
+        if (score > bestScore) {
+            bestScore = score;
+            bestMatch = klass;
+            // Debug: cetak nama kelas
+            if (api.class_get_name) {
+                void* namePtr = api.class_get_name(klass);
+                if (namePtr && api.string_to_utf8) {
+                    char* cname = api.string_to_utf8(namePtr);
+                    if (cname) {
+                        os_log(OS_LOG_DEFAULT, "[FFESP] candidate: %{public}s (score=%d)",
+                               cname, score);
+                    }
+                }
+            }
+        }
+    }
+
+    os_log(OS_LOG_DEFAULT, "[FFESP] best score: %d", bestScore);
+
+    if (bestScore >= 5) {
+        return bestMatch;
+    }
+    return nullptr;
+}
+
 static bool InitScan() {
-    // Namespace + nama kelas — dari External_ESP_Free_Fire
-    struct Candidate { const char* ns; const char* name; };
-    Candidate candidates[] = {
-        // Prioritas 1: namespace COW.GamePlay (dari source eksternal)
-        { "COW.GamePlay", "Player" },
-        { "COW.GamePlay", "PlayerEntity" },
-        { "COW.GamePlay", "PlayerAvatar" },
-        { "COW.GamePlay", "AvatarEntity" },
-        { "COW.GamePlay", "LocalPlayer" },
-        { "COW.GamePlay", "Character" },
-        { "COW.GamePlay", "CharacterEntity" },
-        // Prioritas 2: namespace COW
-        { "COW", "Player" },
-        { "COW", "PlayerEntity" },
-        { "COW", "AvatarEntity" },
-        // Prioritas 3: tanpa namespace (fallback)
-        { "", "Player" },
-        { "", "PlayerEntity" },
-        { "", "Avatar" },
-        { "", "Character" },
-        { "", "PlayerAvatar" },
-        { "", "FFPlayer" },
-        { nullptr, nullptr }
-    };
+    snprintf(g_debugClass, sizeof(g_debugClass), "scanning...");
+    os_log(OS_LOG_DEFAULT, "[FFESP] scanning all classes...");
 
-    for (int i = 0; candidates[i].ns; i++) {
-        void* k = Il2CppFindClass(candidates[i].ns, candidates[i].name);
-        if (k) {
-            g_playerCls = k;
-            snprintf(g_debugClass, sizeof(g_debugClass),
-                     "OK:%s.%s",
-                     candidates[i].ns[0] ? candidates[i].ns : "-",
-                     candidates[i].name);
-            os_log(OS_LOG_DEFAULT, "[FFESP] FOUND: %{public}s.%{public}s",
-                   candidates[i].ns, candidates[i].name);
-            break;
+    // Coba scan otomatis dulu
+    g_playerCls = findPlayerClassByScan();
+
+    if (g_playerCls && api.class_get_name) {
+        void* namePtr = api.class_get_name(g_playerCls);
+        if (namePtr && api.string_to_utf8) {
+            char* cname = api.string_to_utf8(namePtr);
+            if (cname) {
+                snprintf(g_debugClass, sizeof(g_debugClass),
+                         "FOUND:%s(%dcls)", cname, g_classCount);
+            }
         }
     }
 
     if (!g_playerCls) {
-        snprintf(g_debugClass, sizeof(g_debugClass), "NO CLASS");
+        // Fallback: coba nama kandidat
+        const char* names[] = {
+            "Player", "PlayerEntity", "AvatarEntity",
+            "LocalPlayer", "Character", nullptr
+        };
+        for (int i = 0; names[i]; i++) {
+            void* k = Il2CppFindClass("COW.GamePlay", names[i]);
+            if (k) { g_playerCls = k; break; }
+            k = Il2CppFindClass("", names[i]);
+            if (k) { g_playerCls = k; break; }
+        }
+    }
+
+    if (!g_playerCls) {
+        snprintf(g_debugClass, sizeof(g_debugClass), "NO CLASS(%d)", g_classCount);
         return false;
     }
 
@@ -195,7 +262,6 @@ static Vec3 InvokeGetPosition(void* instance) {
 static void ScanPlayers() {
     g_players.clear();
     g_debugFound = 0;
-
     if (!g_findMethod || !g_playerCls) return;
     if (!api.class_get_type || !api.type_get_object) return;
 
@@ -250,8 +316,8 @@ bool IsAimbot()        { return g_aim; }
 
 static void Worker() {
     api.thread_attach(api.domain_get());
+    std::this_thread::sleep_for(std::chrono::seconds(10));
 
-    std::this_thread::sleep_for(std::chrono::seconds(8));
     bool scanReady = InitScan();
     os_log(OS_LOG_DEFAULT, "[FFESP] ScanReady=%d", scanReady);
 
@@ -279,7 +345,7 @@ static void Worker() {
             CGFloat sw = w.bounds.size.width;
             CGFloat sh = w.bounds.size.height;
 
-            // Debug di layar
+            // Debug di kanan atas
             DrawText(CGPointMake(sw - 100, 40),
                      [NSString stringWithFormat:@"T:%d", count]);
             DrawText(CGPointMake(sw - 100, 60), debugStr);
@@ -288,22 +354,20 @@ static void Worker() {
             Vec3 local = g_local;
 
             for (const Vec3& p : players) {
-                float d = dist3(p, local);
+                float d = 0;
+                float dx = p.x - local.x, dy = p.y - local.y, dz = p.z - local.z;
+                d = sqrtf(dx*dx + dy*dy + dz*dz);
                 if (d > Offsets::MAX_DIST) continue;
 
                 CGPoint s;
                 if (!WorldToScreen(p, view, sw, sh, &s)) continue;
 
+                // Gaya seperti referensi: garis dari atas layar ke player + dot + jarak
                 if (esp) {
-                    CGFloat h = 10000.0 / d;
-                    CGFloat bw = h * 0.5;
-                    DrawBox(CGRectMake(s.x - bw/2, s.y - h, bw, h));
-                }
-                if (line) {
-                    DrawLine(CGPointMake(sw/2, sh), s);
-                }
-                if (name) {
-                    DrawText(CGPointMake(s.x, s.y - 30),
+                    UIColor* col = [UIColor colorWithRed:0 green:1 blue:0.4 alpha:1];
+                    DrawLine(CGPointMake(s.x, 0), s, col, 1.0);
+                    DrawDot(s, col, 4.0);
+                    DrawText(CGPointMake(s.x, s.y - 20),
                              [NSString stringWithFormat:@"%.0fm", d]);
                 }
             }
