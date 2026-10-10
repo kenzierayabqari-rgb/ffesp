@@ -76,7 +76,7 @@ static void DrawText(CGPoint pt, NSString* txt) {
     t.foregroundColor = [UIColor whiteColor].CGColor;
     t.alignmentMode = kCAAlignmentCenter;
     t.contentsScale = [UIScreen mainScreen].scale;
-    t.frame = CGRectMake(pt.x - 60, pt.y, 120, 14);
+    t.frame = CGRectMake(pt.x - 80, pt.y, 160, 14);
     t.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35].CGColor;
     [g_overlay addSublayer:t];
 }
@@ -103,7 +103,7 @@ static bool WorldToScreen(const Vec3& w, const float* m, float sw, float sh, CGP
 // ============================================================
 // DEBUG STATE
 // ============================================================
-static char g_debugClass[64] = "scanning...";
+static char g_debugClass[96] = "scanning...";
 static int  g_debugFound = 0;
 
 static void* g_findMethod   = nullptr;
@@ -112,24 +112,44 @@ static void* g_getTransform = nullptr;
 static void* g_getPosition  = nullptr;
 
 // ============================================================
-// SCAN
+// SCAN — NAMA KELAS DARI SOURCE EKSTERNAL
 // ============================================================
 static bool InitScan() {
-    const char* candidates[] = {
-        "Player", "PlayerAvatar", "Avatar", "AvatarEntity",
-        "PlayerEntity", "Character", "CharacterEntity",
-        "FFPlayer", "PlayerController", "LocalPlayer",
-        "PlayerManager", "GamePlayer", "HumanPlayer",
-        nullptr
+    // Namespace + nama kelas — dari External_ESP_Free_Fire
+    struct Candidate { const char* ns; const char* name; };
+    Candidate candidates[] = {
+        // Prioritas 1: namespace COW.GamePlay (dari source eksternal)
+        { "COW.GamePlay", "Player" },
+        { "COW.GamePlay", "PlayerEntity" },
+        { "COW.GamePlay", "PlayerAvatar" },
+        { "COW.GamePlay", "AvatarEntity" },
+        { "COW.GamePlay", "LocalPlayer" },
+        { "COW.GamePlay", "Character" },
+        { "COW.GamePlay", "CharacterEntity" },
+        // Prioritas 2: namespace COW
+        { "COW", "Player" },
+        { "COW", "PlayerEntity" },
+        { "COW", "AvatarEntity" },
+        // Prioritas 3: tanpa namespace (fallback)
+        { "", "Player" },
+        { "", "PlayerEntity" },
+        { "", "Avatar" },
+        { "", "Character" },
+        { "", "PlayerAvatar" },
+        { "", "FFPlayer" },
+        { nullptr, nullptr }
     };
 
-    for (int i = 0; candidates[i]; i++) {
-        void* k = Il2CppFindClass("", candidates[i]);
+    for (int i = 0; candidates[i].ns; i++) {
+        void* k = Il2CppFindClass(candidates[i].ns, candidates[i].name);
         if (k) {
             g_playerCls = k;
-            snprintf(g_debugClass, sizeof(g_debugClass), "OK: %s", candidates[i]);
-            os_log(OS_LOG_DEFAULT, "[FFESP] Player class FOUND: %{public}s",
-                   candidates[i]);
+            snprintf(g_debugClass, sizeof(g_debugClass),
+                     "OK:%s.%s",
+                     candidates[i].ns[0] ? candidates[i].ns : "-",
+                     candidates[i].name);
+            os_log(OS_LOG_DEFAULT, "[FFESP] FOUND: %{public}s.%{public}s",
+                   candidates[i].ns, candidates[i].name);
             break;
         }
     }
@@ -139,11 +159,13 @@ static bool InitScan() {
         return false;
     }
 
+    // Cari FindObjectsOfType
     void* objCls = Il2CppFindClass("UnityEngine", "Object");
     if (objCls) {
         g_findMethod = Il2CppFindMethod(objCls, "FindObjectsOfType", 1);
     }
 
+    // Transform methods
     void* transformCls = Il2CppFindClass("UnityEngine", "Transform");
     if (transformCls) {
         g_getPosition = Il2CppFindMethod(transformCls, "get_position", 0);
@@ -159,13 +181,11 @@ static bool InitScan() {
 static Vec3 InvokeGetPosition(void* instance) {
     Vec3 out = {0,0,0};
     if (!g_getPosition || !instance) return out;
-
     uint8_t buf[32] = {0};
     void* args[] = { buf };
     void* exc = nullptr;
     api.runtime_invoke(g_getPosition, instance, args, &exc);
     if (exc) return out;
-
     out.x = *(float*)(buf);
     out.y = *(float*)(buf + 4);
     out.z = *(float*)(buf + 8);
@@ -259,7 +279,7 @@ static void Worker() {
             CGFloat sw = w.bounds.size.width;
             CGFloat sh = w.bounds.size.height;
 
-            // DEBUG di layar
+            // Debug di layar
             DrawText(CGPointMake(sw - 100, 40),
                      [NSString stringWithFormat:@"T:%d", count]);
             DrawText(CGPointMake(sw - 100, 60), debugStr);
