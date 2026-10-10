@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import "Menu.h"
 #import "ESP.h"
+#import "AntiBypass.h"
 
 __attribute__((constructor))
 static void ffesp_boot() {
@@ -8,6 +9,7 @@ static void ffesp_boot() {
     dispatch_after(
         dispatch_time(DISPATCH_TIME_NOW, 5*NSEC_PER_SEC),
         dispatch_get_main_queue(), ^{
+            AntiBypass::Install();
             ESP::Init();
             [[FFMenu shared] show];
         });
