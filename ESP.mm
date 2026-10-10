@@ -16,23 +16,28 @@ static volatile bool g_aim   = false;
 
 static CAShapeLayer* g_overlay = nil;
 
-// ============================================================
-// OVERLAY
-// ============================================================
-static UIWindow* keyWindow() {
+struct Vec3 { float x, y, z; };
+static std::vector<Vec3> g_players;
+static Vec3 g_local = {0,0,0};
+
+// ---------- OVERLAY ----------
+static UIWindow* gameWindow() {
     for (UIWindow* w in [UIApplication sharedApplication].windows)
         if (w.isKeyWindow) return w;
+    for (UIWindow* w in [UIApplication sharedApplication].windows)
+        if (!w.hidden && w.windowLevel == UIWindowLevelNormal) return w;
     return nil;
 }
 
 static void EnsureOverlay() {
-    if (g_overlay) return;
-    UIWindow* w = keyWindow();
+    if (g_overlay && g_overlay.superlayer) return;
+    UIWindow* w = gameWindow();
     if (!w) return;
     g_overlay = [CAShapeLayer layer];
     g_overlay.frame = w.bounds;
     g_overlay.backgroundColor = [UIColor clearColor].CGColor;
-    g_overlay.zPosition = 99999;
+    g_overlay.zPosition = 99998;
+    g_overlay.userInteractionEnabled = NO;
     [w.layer addSublayer:g_overlay];
 }
 
@@ -74,19 +79,13 @@ static void DrawText(CGPoint pt, NSString* txt) {
     [g_overlay addSublayer:t];
 }
 
-// ============================================================
-// MATH
-// ============================================================
-struct Vec3 { float x, y, z; };
-
+// ---------- MATH ----------
 static float dist3(const Vec3& a, const Vec3& b) {
     float dx = a.x-b.x, dy = a.y-b.y, dz = a.z-b.z;
     return sqrtf(dx*dx + dy*dy + dz*dz);
 }
 
-static bool WorldToScreen(const Vec3& w, const float* m, float sw, float sh,
-                          CGPoint* out)
-{
+static bool WorldToScreen(const Vec3& w, const float* m, float sw, float sh, CGPoint* out) {
     float x = m[0]*w.x + m[4]*w.y + m[8]*w.z  + m[12];
     float y = m[1]*w.x + m[5]*w.y + m[9]*w.z  + m[13];
     float z = m[2]*w.x + m[6]*w.y + m[10]*w.z + m[14];
@@ -97,37 +96,104 @@ static bool WorldToScreen(const Vec3& w, const float* m, float sw, float sh,
     return true;
 }
 
-// ============================================================
-// PLAYER SCAN — ISI SETELAH DUMP
-// ============================================================
-static std::vector<Vec3> g_players;
+// ---------- SCAN PLAYER ----------
+// Pendekatan: pakai UnityEngine.Object.FindObjectsOfType(Player.class)
+// Tidak butuh offset field — hanya nama kelas & method.
+
+static void* g_findMethod   = nullptr;
+static void* g_playerCls    = nullptr;
+static void* g_getTransform = nullptr;
+static void* g_getPosition  = nullptr;
+static void* g_localPlayer  = nullptr;
+
+static bool InitScan() {
+    // Cari kelas Player — coba beberapa nama alternatif
+    const char* candidates[] = { "Player", "Character", "Avatar",
+                                 "PlayerEntity", "AvatarEntity", nullptr };
+    for (int i = 0; candidates[i]; i++) {
+        g_playerCls = Il2CppFindClass("", candidates[i]);
+        if (g_playerCls) {
+            os_log(OS_LOG_DEFAULT, "[FFESP] Player class: %{public}s",
+                   candidates[i]);
+            break;
+        }
+    }
+    if (!g_playerCls) {
+        os_log(OS_LOG_DEFAULT, "[FFESP] Player class tidak ditemukan");
+        return false;
+    }
+
+    // Cari method FindObjectsOfType di UnityEngine.Object
+    void* objCls = Il2CppFindClass("UnityEngine", "Object");
+    if (objCls)
+        g_findMethod = Il2CppFindMethod(objCls, "FindObjectsOfType", 1);
+
+    // Cari method transform & position di Player
+    void* transformCls = Il2CppFindClass("UnityEngine", "Transform");
+    if (transformCls) {
+        g_getPosition = Il2CppFindMethod(transformCls, "get_position", 0);
+    }
+    g_getTransform = Il2CppFindMethod(g_playerCls, "get_transform", 0);
+
+    os_log(OS_LOG_DEFAULT, "[FFESP] find=%p transform=%p pos=%p",
+           g_findMethod, g_getTransform, g_getPosition);
+
+    return g_findMethod && g_getTransform && g_getPosition;
+}
+
+static Vec3 InvokeGetPosition(void* instance) {
+    Vec3 out = {0,0,0};
+    if (!g_getPosition || !instance) return out;
+
+    uint8_t buf[32] = {0};
+    void* args[] = { buf };
+    void* exc = nullptr;
+    api.runtime_invoke(g_getPosition, instance, args, &exc);
+    if (exc) return out;
+
+    out.x = *(float*)(buf);
+    out.y = *(float*)(buf + 4);
+    out.z = *(float*)(buf + 8);
+    return out;
+}
 
 static void ScanPlayers() {
     g_players.clear();
+    if (!g_findMethod || !g_playerCls) return;
 
-    // ----------------------------------------------------------
-    // GANTI BAGIAN INI dengan hasil dump FF versi DENI.
-    // Contoh alur:
-    //
-    // void* gmCls  = Il2CppFindClass("", Offsets::CLS_GAME_MANAGER);
-    // void* gmInst = ...; // instance via static field
-    // void* list   = *(void**)((uint8_t*)gmInst + OFFSET_LIST);
-    // int   cnt    = *(int*)((uint8_t*)list + 0x18);
-    // void* arr    = *(void**)((uint8_t*)list + 0x10);
-    //
-    // for (int i = 0; i < cnt; i++) {
-    //     void* p = *(void**)((uint8_t*)arr + 0x20 + i*8);
-    //     if (!p) continue;
-    //     if (*(bool*)((uint8_t*)p + OFFSET_DEAD)) continue;
-    //     Vec3 pos = *(Vec3*)((uint8_t*)p + OFFSET_POS);
-    //     g_players.push_back(pos);
-    // }
-    // ----------------------------------------------------------
+    // Dapatkan System.Type dari kelas Player
+    void* typeObj = api.class_get_type(g_playerCls);
+    if (!typeObj) return;
+
+    // Panggil FindObjectsOfType(type)
+    void* args[] = { typeObj };
+    void* exc = nullptr;
+    void* result = api.runtime_invoke(g_findMethod, nullptr, args, &exc);
+    if (exc || !result) return;
+
+    int len = api.array_length(result);
+    if (len <= 0 || len > 256) return;
+
+    for (int i = 0; i < len; i++) {
+        void* player = api.array_get(result, i);
+        if (!player) continue;
+
+        // Panggil get_transform(player) → Transform*
+        uint8_t tbuf[16] = {0};
+        void* targs[] = { tbuf };
+        void* texc = nullptr;
+        api.runtime_invoke(g_getTransform, player, targs, &texc);
+        if (texc) continue;
+        void* transform = *(void**)tbuf;
+        if (!transform) continue;
+
+        Vec3 pos = InvokeGetPosition(transform);
+        if (pos.x == 0 && pos.y == 0 && pos.z == 0) continue;
+        g_players.push_back(pos);
+    }
 }
 
-// ============================================================
-// RUNTIME
-// ============================================================
+// ---------- RUNTIME ----------
 namespace ESP {
 
 void SetESP(bool v)    { g_esp = v; }
@@ -142,6 +208,11 @@ bool IsAimbot()        { return g_aim; }
 static void Worker() {
     api.thread_attach(api.domain_get());
 
+    // Tunggu Unity siap
+    std::this_thread::sleep_for(std::chrono::seconds(8));
+    bool scanReady = InitScan();
+    os_log(OS_LOG_DEFAULT, "[FFESP] ScanReady=%d", scanReady);
+
     while (true) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1000/Offsets::FPS));
 
@@ -150,36 +221,45 @@ static void Worker() {
             continue;
         }
 
-        ScanPlayers();
+        if (scanReady) ScanPlayers();
+
+        // Snapshot untuk render
+        auto players = g_players;
+        bool esp = g_esp, line = g_line, name = g_name;
+        int count = (int)players.size();
 
         dispatch_async(dispatch_get_main_queue(), ^{
             EnsureOverlay();
             ClearOverlay();
 
-            UIWindow* w = keyWindow();
+            UIWindow* w = gameWindow();
             if (!w) return;
             CGFloat sw = w.bounds.size.width;
             CGFloat sh = w.bounds.size.height;
 
-            float view[16] = {0}; // isi dari Camera.main.worldToCameraMatrix
-            Vec3 local = {0,0,0}; // posisi lokal
+            // Debug: tampilkan jumlah target di kanan atas
+            DrawText(CGPointMake(sw - 60, 40),
+                     [NSString stringWithFormat:@"T:%d", count]);
 
-            for (const Vec3& p : g_players) {
+            float view[16] = {0};
+            Vec3 local = g_local;
+
+            for (const Vec3& p : players) {
                 float d = dist3(p, local);
                 if (d > Offsets::MAX_DIST) continue;
 
                 CGPoint s;
                 if (!WorldToScreen(p, view, sw, sh, &s)) continue;
 
-                if (g_esp) {
+                if (esp) {
                     CGFloat h = 10000.0 / d;
                     CGFloat bw = h * 0.5;
                     DrawBox(CGRectMake(s.x - bw/2, s.y - h, bw, h));
                 }
-                if (g_line) {
+                if (line) {
                     DrawLine(CGPointMake(sw/2, sh), s);
                 }
-                if (g_name) {
+                if (name) {
                     DrawText(CGPointMake(s.x, s.y - 30),
                              [NSString stringWithFormat:@"%.0fm", d]);
                 }
