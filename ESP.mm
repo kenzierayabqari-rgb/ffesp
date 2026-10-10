@@ -52,20 +52,12 @@ static void ClearOverlay() {
 static void DrawLine(CGPoint a, CGPoint b, UIColor* c, CGFloat lw) {
     CAShapeLayer* l = [CAShapeLayer layer];
     UIBezierPath* p = [UIBezierPath bezierPath];
-    [p moveToPoint:a]; [p addLineToPoint:b];
+    [p moveToPoint:a];
+    [p addLineToPoint:b];
     l.path = p.CGPath;
     l.strokeColor = c.CGColor;
     l.fillColor = [UIColor clearColor].CGColor;
     l.lineWidth = lw;
-    [g_overlay addSublayer:l];
-}
-
-static void DrawBox(CGRect r, UIColor* c) {
-    CAShapeLayer* l = [CAShapeLayer layer];
-    l.path = [UIBezierPath bezierPathWithRect:r].CGPath;
-    l.strokeColor = c.CGColor;
-    l.fillColor = [UIColor clearColor].CGColor;
-    l.lineWidth = 1.5;
     [g_overlay addSublayer:l];
 }
 
@@ -93,78 +85,50 @@ static void DrawText(CGPoint pt, NSString* txt) {
 }
 
 // ============================================================
-// MATH
-// ============================================================
-static bool WorldToScreen(const Vec3& w, const float* m, float sw, float sh, CGPoint* out) {
-    float x = m[0]*w.x + m[4]*w.y + m[8]*w.z  + m[12];
-    float y = m[1]*w.x + m[5]*w.y + m[9]*w.z  + m[13];
-    float z = m[2]*w.x + m[6]*w.y + m[10]*w.z + m[14];
-    float ww= m[3]*w.x + m[7]*w.y + m[11]*w.z + m[15];
-    if (ww < 0.01f) return false;
-    out->x = (x/ww) * 0.5f * sw + sw * 0.5f;
-    out->y = (-y/ww) * 0.5f * sh + sh * 0.5f;
-    return true;
-}
-
-// ============================================================
 // SCAN STATE
 // ============================================================
 static char g_debugClass[128] = "init...";
 static int  g_debugFound = 0;
 
-static void* g_findMethod        = nullptr;   // UnityEngine.Object.FindObjectsOfType
-static void* g_playerCls         = nullptr;
-static void* g_getTransform      = nullptr;
-static void* g_getPosition       = nullptr;
-static void* g_isLocalMethod     = nullptr;   // IsLocalPlayer
-static void* g_getCurHP          = nullptr;   // get_CurHP
-static void* g_getMaxHP          = nullptr;   // get_MaxHP
-static void* g_getNickName       = nullptr;   // get_NickName
-static void* g_isDieing          = nullptr;   // get_IsDieing
-static void* g_isTeammate        = nullptr;   // IsLocalTeammate
-static void* g_localPlayer       = nullptr;   // cached local player instance
+static void* g_findMethod    = nullptr;
+static void* g_playerCls     = nullptr;
+static void* g_getTransform  = nullptr;
+static void* g_getPosition   = nullptr;
+static void* g_isLocalMethod = nullptr;
+static void* g_getCurHP      = nullptr;
+static void* g_getMaxHP      = nullptr;
+static void* g_getNickName   = nullptr;
+static void* g_isDieing      = nullptr;
+static void* g_isTeammate    = nullptr;
 
-// Dapatkan system type pointer dari kelas
 static void* classToTypeObj(void* klass) {
-    if (!klass || !api.class_get_type || !api.type_get_object) return nullptr;
+    if (!klass) return nullptr;
+    if (!api.class_get_type) return nullptr;
+    if (!api.type_get_object) return nullptr;
     void* type = api.class_get_type(klass);
     if (!type) return nullptr;
     return api.type_get_object(type);
 }
 
-// Panggil method no-arg tanpa instance (static)
-static void* invokeStatic0(void* method) {
-    if (!method || !api.runtime_invoke) return nullptr;
-    void* exc = nullptr;
-    return api.runtime_invoke(method, nullptr, nullptr, &exc);
-}
-
-// Panggil method dengan instance
-static void* invokeInstance0(void* method, void* instance) {
-    if (!method || !instance || !api.runtime_invoke) return nullptr;
-    void* exc = nullptr;
-    return api.runtime_invoke(method, instance, nullptr, &exc);
-}
-
 // ============================================================
-// INIT SCAN — cari kelas COW.GamePlay.Player
+// INIT SCAN
 // ============================================================
 static bool InitScan() {
     os_log(OS_LOG_DEFAULT, "[FFESP] === InitScan ===");
 
-    // Cari kelas Player — dengan namespace yang benar dari dump
-    const char* candidatesNs[]   = { "COW.GamePlay", "COW", "" };
-    const char* candidatesName[] = { "Player", "PlayerEntity", "LocalPlayer" };
+    const char* nsList[]   = { "COW.GamePlay", "COW", "" };
+    const char* nameList[] = { "Player", "PlayerEntity", "LocalPlayer" };
 
-    for (int i = 0; i < 3 && !g_playerCls; i++) {
-        for (int j = 0; j < 3 && !g_playerCls; j++) {
-            void* k = Il2CppFindClass(candidatesNs[i], candidatesName[j]);
+    for (int i = 0; i < 3; i++) {
+        if (g_playerCls) break;
+        for (int j = 0; j < 3; j++) {
+            void* k = Il2CppFindClass(nsList[i], nameList[j]);
             if (k) {
                 g_playerCls = k;
                 snprintf(g_debugClass, sizeof(g_debugClass),
-                         "OK:%s.%s", candidatesNs[i], candidatesName[j]);
-                os_log(OS_LOG_DEFAULT, "[FFESP] FOUND class: %s.%s",
-                       candidatesNs[i], candidatesName[j]);
+                         "OK:%s.%s", nsList[i], nameList[j]);
+                os_log(OS_LOG_DEFAULT, "[FFESP] FOUND: %s.%s",
+                       nsList[i], nameList[j]);
                 break;
             }
         }
@@ -175,7 +139,6 @@ static bool InitScan() {
         return false;
     }
 
-    // Ambil method-method penting
     void* objCls = Il2CppFindClass("UnityEngine", "Object");
     if (objCls) {
         g_findMethod = Il2CppFindMethod(objCls, "FindObjectsOfType", 1);
@@ -187,13 +150,12 @@ static bool InitScan() {
     }
     g_getTransform = Il2CppFindMethod(g_playerCls, "get_transform", 0);
 
-    // Method khusus Player (dari dump)
-    g_isLocalMethod  = Il2CppFindMethod(g_playerCls, "IsLocalPlayer", 0);
-    g_getCurHP       = Il2CppFindMethod(g_playerCls, "get_CurHP", 0);
-    g_getMaxHP       = Il2CppFindMethod(g_playerCls, "get_MaxHP", 0);
-    g_getNickName    = Il2CppFindMethod(g_playerCls, "get_NickName", 0);
-    g_isDieing       = Il2CppFindMethod(g_playerCls, "get_IsDieing", 0);
-    g_isTeammate     = Il2CppFindMethod(g_playerCls, "IsLocalTeammate", 0);
+    g_isLocalMethod = Il2CppFindMethod(g_playerCls, "IsLocalPlayer", 0);
+    g_getCurHP      = Il2CppFindMethod(g_playerCls, "get_CurHP", 0);
+    g_getMaxHP      = Il2CppFindMethod(g_playerCls, "get_MaxHP", 0);
+    g_getNickName   = Il2CppFindMethod(g_playerCls, "get_NickName", 0);
+    g_isDieing      = Il2CppFindMethod(g_playerCls, "get_IsDieing", 0);
+    g_isTeammate    = Il2CppFindMethod(g_playerCls, "IsLocalTeammate", 0);
 
     os_log(OS_LOG_DEFAULT,
            "[FFESP] methods: find=%p xform=%p pos=%p isLocal=%p HP=%p name=%p",
@@ -211,7 +173,7 @@ static bool InitScan() {
 }
 
 // ============================================================
-// SCAN PLAYERS — pakai FindObjectsOfType
+// PLAYER SCAN
 // ============================================================
 static Vec3 invokeGetPosition(void* instance) {
     Vec3 out = {0,0,0};
@@ -269,10 +231,8 @@ static void ScanPlayers() {
         void* player = api.array_get ? api.array_get(result, i) : nullptr;
         if (!player) continue;
 
-        // Skip local player
         if (isLocal(player)) continue;
 
-        // Ambil transform
         uint8_t tbuf[16] = {0};
         void* targs[] = { tbuf };
         void* texc = nullptr;
@@ -316,14 +276,15 @@ static void Worker() {
         std::this_thread::sleep_for(std::chrono::milliseconds(33));
 
         if (!g_esp) {
-            dispatch_async(dispatch_get_main_queue(), ^{ ClearOverlay(); });
+            dispatch_async(dispatch_get_main_queue(), ^{
+                ClearOverlay();
+            });
             continue;
         }
 
         if (scanReady) ScanPlayers();
 
-        auto players = g_players;
-        bool esp = g_esp, line = g_line, name = g_name;
+        std::vector<Vec3> players = g_players;
         int count = (int)players.size();
         NSString* debugStr = [NSString stringWithUTF8String:g_debugClass];
 
@@ -331,28 +292,35 @@ static void Worker() {
             EnsureOverlay();
             ClearOverlay();
 
-            UIWindow* w = gameWindow();
-            if (!w) return;
-            CGFloat sw = w.bounds.size.width;
-            CGFloat sh = w.bounds.size.height;
-            CGFloat sh = w.bounds.size.height;
+            UIWindow* win = gameWindow();
+            if (!win) return;
+
+            CGFloat sw = win.bounds.size.width;
+            CGFloat sh = win.bounds.size.height;
 
             DrawText(CGPointMake(sw - 100, 40),
                      [NSString stringWithFormat:@"P:%d", count]);
             DrawText(CGPointMake(sw - 100, 60), debugStr);
 
-            if (!esp) return;
+            if (!g_esp) return;
 
             UIColor* col = [UIColor colorWithRed:0 green:1 blue:0.4 alpha:1];
-            for (const Vec3& p : players) {
-                CGPoint s;
-                if (!WorldToScreen(p, nullptr, sw, sh, &s)) {
-                    // Tidak pakai matrix dulu — pakai posisi mentah sementara
-                    // untuk melihat apakah data masuk
-                    continue;
+
+            for (size_t i = 0; i < players.size(); i++) {
+                Vec3 p = players[i];
+                float d = sqrtf(p.x*p.x + p.y*p.y + p.z*p.z);
+
+                // Untuk sementara: gambar dot di tengah layar
+                // (view matrix belum kita isi)
+                // Setelah P:>0, kita ganti dengan world-to-screen asli
+                CGPoint s = CGPointMake(sw * 0.5f, sh * 0.4f + (i * 20));
+
+                if (g_line) {
+                    DrawLine(CGPointMake(sw * 0.5f, sh), s, col, 1.0);
                 }
-                if (line) DrawLine(CGPointMake(s.x, 0), s, col, 1.0);
                 DrawDot(s, col, 4.0);
+                DrawText(CGPointMake(s.x, s.y - 20),
+                         [NSString stringWithFormat:@"%.0f", d]);
             }
         });
     }
