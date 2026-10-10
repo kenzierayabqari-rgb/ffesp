@@ -248,8 +248,7 @@ static void Worker() {
         auto players = g_players;
         bool esp = g_esp, line = g_line, name = g_name;
         int count = (int)players.size();
-        char debugCls[64];
-        strncpy(debugCls, g_debugClass, sizeof(debugCls));
+        NSString* debugStr = [NSString stringWithUTF8String:g_debugClass];
 
         dispatch_async(dispatch_get_main_queue(), ^{
             EnsureOverlay();
@@ -260,11 +259,10 @@ static void Worker() {
             CGFloat sw = w.bounds.size.width;
             CGFloat sh = w.bounds.size.height;
 
-            // DEBUG di layar — counter & nama kelas
+            // DEBUG di layar
             DrawText(CGPointMake(sw - 100, 40),
                      [NSString stringWithFormat:@"T:%d", count]);
-            DrawText(CGPointMake(sw - 100, 60),
-                     [NSString stringWithUTF8String:debugCls]);
+            DrawText(CGPointMake(sw - 100, 60), debugStr);
 
             float view[16] = {0};
             Vec3 local = g_local;
