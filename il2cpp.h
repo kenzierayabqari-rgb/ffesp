@@ -20,9 +20,12 @@ struct Il2CppApi {
     int    (*array_length)(void*);
     void*  (*array_get)(void*, int);
     void*  (*object_get_class)(void*);
-    void*  (*class_get_name)(void*);
-    void*  (*image_get_class_count)(void*);
+    // Tambahan untuk enumerate assemblies
+    void*  (*domain_get_assemblies)(void*, size_t*);
+    size_t (*image_get_class_count)(void*);
     void*  (*image_get_class)(void*, size_t);
+    void*  (*class_get_name)(void*);
+    void*  (*class_get_namespace)(void*);
 };
 
 extern Il2CppApi api;
@@ -30,5 +33,6 @@ extern Il2CppApi api;
 bool  Il2CppInit();
 void* Il2CppImage();
 void* Il2CppFindClass(const char* ns, const char* name);
+void* Il2CppFindClassAuto(const char* ns, const char* name);   // NEW
 void* Il2CppFindMethod(void* klass, const char* method, int argc);
 size_t Il2CppFieldOffset(void* klass, const char* field);
