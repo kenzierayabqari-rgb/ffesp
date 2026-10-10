@@ -37,7 +37,6 @@ static void EnsureOverlay() {
     g_overlay.frame = w.bounds;
     g_overlay.backgroundColor = [UIColor clearColor].CGColor;
     g_overlay.zPosition = 99998;
-    g_overlay.userInteractionEnabled = NO;
     [w.layer addSublayer:g_overlay];
 }
 
