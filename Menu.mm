@@ -7,7 +7,9 @@
     UIButton* _espBtn;
     UIButton* _lineBtn;
     UIButton* _aimBtn;
+    UIButton* _floatBtn;   // tombol kecil floating
     NSTimer* _attachTimer;
+    BOOL _panelVisible;
 }
 
 + (instancetype)shared {
@@ -19,14 +21,14 @@
 - (instancetype)init {
     self = [super init];
     if (!self) return nil;
+    _panelVisible = YES;
     [self buildUI];
     return self;
 }
 
 - (UIWindow*)gameWindow {
-    for (UIWindow* w in [UIApplication sharedApplication].windows) {
+    for (UIWindow* w in [UIApplication sharedApplication].windows)
         if (w.isKeyWindow) return w;
-    }
     UIWindow* found = nil;
     for (UIWindow* w in [UIApplication sharedApplication].windows) {
         if (w.hidden) continue;
@@ -49,11 +51,12 @@
 }
 
 - (void)buildUI {
+    // ---------- PANEL UTAMA ----------
     _panel = [[UIView alloc] initWithFrame:CGRectMake(20, 100, 230, 260)];
     _panel.backgroundColor = [UIColor colorWithWhite:0 alpha:0.8];
     _panel.layer.cornerRadius = 14;
     _panel.userInteractionEnabled = YES;
-    _panel.hidden = YES;
+    _panel.hidden = NO;
 
     UILabel* t = [[UILabel alloc] initWithFrame:CGRectMake(0, 12, 230, 26)];
     t.text = @"FF ESP";
@@ -75,14 +78,41 @@
     UIPanGestureRecognizer* pan =
         [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(onPan:)];
     [_panel addGestureRecognizer:pan];
+
+    // ---------- TOMBOL FLOATING (selalu tampil) ----------
+    _floatBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    _floatBtn.frame = CGRectMake(0, 0, 44, 44);  // posisi di-set nanti
+    [_floatBtn setTitle:@"⚙" forState:UIControlStateNormal];
+    [_floatBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    _floatBtn.titleLabel.font = [UIFont systemFontOfSize:22];
+    _floatBtn.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55];
+    _floatBtn.layer.cornerRadius = 22;
+    _floatBtn.layer.borderWidth = 1;
+    _floatBtn.layer.borderColor = [UIColor colorWithRed:0 green:1 blue:0.5 alpha:0.7].CGColor;
+    _floatBtn.userInteractionEnabled = YES;
+    [_floatBtn addTarget:self action:@selector(onFloatTap) forControlEvents:UIControlEventTouchUpInside];
+
+    // Drag untuk tombol floating
+    UIPanGestureRecognizer* fpan =
+        [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(onFloatPan:)];
+    [_floatBtn addGestureRecognizer:fpan];
 }
 
 - (void)attachToGame {
     UIWindow* w = [self gameWindow];
     if (!w) return;
-    if (_panel.superview == w) return;
-    [_panel removeFromSuperview];
-    [w addSubview:_panel];
+
+    if (_panel.superview != w) {
+        [_panel removeFromSuperview];
+        [w addSubview:_panel];
+    }
+    if (_floatBtn.superview != w) {
+        [_floatBtn removeFromSuperview];
+        [w addSubview:_floatBtn];
+        // Posisi default: kanan atas
+        _floatBtn.center = CGPointMake(w.bounds.size.width - 40, 120);
+    }
+    [w bringSubviewToFront:_floatBtn];
     [w bringSubviewToFront:_panel];
 }
 
@@ -107,9 +137,18 @@
     NSLog(@"[FFESP] AIM=%d", v);
 }
 
+// HIDE panel — tombol floating tetap ada
 - (void)onHide {
     _panel.hidden = YES;
-    NSLog(@"[FFESP] menu hidden");
+    _panelVisible = NO;
+    NSLog(@"[FFESP] panel hidden");
+}
+
+// Tap tombol floating — toggle panel
+- (void)onFloatTap {
+    _panelVisible = !_panelVisible;
+    _panel.hidden = !_panelVisible;
+    NSLog(@"[FFESP] panel visible=%d", _panelVisible);
 }
 
 - (void)onPan:(UIPanGestureRecognizer*)g {
@@ -119,8 +158,16 @@
     [g setTranslation:CGPointZero inView:_panel.superview];
 }
 
+- (void)onFloatPan:(UIPanGestureRecognizer*)g {
+    CGPoint t = [g translationInView:_floatBtn.superview];
+    _floatBtn.center = CGPointMake(_floatBtn.center.x + t.x,
+                                   _floatBtn.center.y + t.y);
+    [g setTranslation:CGPointZero inView:_floatBtn.superview];
+}
+
 - (void)show {
     _panel.hidden = NO;
+    _panelVisible = YES;
     [self attachToGame];
     if (_attachTimer) [_attachTimer invalidate];
     _attachTimer = [NSTimer scheduledTimerWithTimeInterval:2.0
@@ -133,6 +180,7 @@
 
 - (void)hide {
     _panel.hidden = YES;
+    _floatBtn.hidden = YES;
     if (_attachTimer) { [_attachTimer invalidate]; _attachTimer = nil; }
 }
 @end
