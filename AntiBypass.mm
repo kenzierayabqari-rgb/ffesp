@@ -5,6 +5,7 @@
 #include "Obfuscate.h"
 #include <mach/mach.h>
 #include <cstring>
+#include <dlfcn.h>
 
 // ARM64 snippets
 static const uint8_t RET_TRUE[]  = { 0x20, 0x00, 0x80, 0x52, 0xC0, 0x03, 0x5F, 0xD6 };
